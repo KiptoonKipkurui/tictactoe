@@ -97,6 +97,25 @@ sequenceDiagram
     end
 ```
 
+## Concurrency and Resilience
+
+- `context`
+  - used on both client and server for graceful shutdown and cancellation
+  - the client also uses it to stop reconnect backoff loops immediately during exit
+- `channels`
+  - used for matchmaking and player/session message flow
+  - this keeps the server coordination model event-driven and reduces shared mutable state
+- `mutexes`
+  - used in the client runtime and terminal UI to protect shared state across goroutines
+  - used in `internal/wire` to serialize concurrent writes to a single network connection
+- `wait groups`
+  - used by the server so shutdown waits for the matchmaker, connection handlers, player read loops, and active sessions to exit before returning
+- `reconnect strategy`
+  - the client retries with exponential backoff when the server is unavailable
+  - after a server restart, clients reconnect and return to the waiting queue
+- `authoritative server`
+  - the server validates moves and owns the game state, which keeps gameplay correct even if the client UI sends invalid or duplicated input
+
 ## Protocol
 
 The client and server exchange JSON messages over a TCP connection. The first client message must be:
