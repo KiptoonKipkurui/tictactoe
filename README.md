@@ -14,6 +14,89 @@ The code is split so transport, game rules, and presentation are isolated:
 - `internal/client/terminal` is one UI implementation. A desktop or web UI can be added by implementing the same interface and reusing the existing client networking package.
 - `internal/wire` defines the shared message contract and a small transport abstraction. The current concrete implementation uses JSON over TCP, but the runtime now depends on a narrow `wire.Conn` interface instead of a JSON-specific type.
 
+```mermaid
+flowchart LR
+    CCLI["cmd/client"]
+    SRVCLI["cmd/server"]
+
+    subgraph Client["Client Side"]
+        CRT["internal/client/runtime.go"]
+        APP["internal/client/app.go"]
+        TUI["internal/client/terminal/ui.go"]
+    end
+
+    subgraph Shared["Shared Contracts"]
+        WIRE["internal/wire"]
+        GAME["internal/game"]
+    end
+
+    subgraph Server["Server Side"]
+        SVC["internal/server/server.go"]
+        MM["internal/server/matchmaker.go"]
+        SES["internal/server/session.go"]
+        PLY["internal/server/player.go"]
+    end
+
+    CCLI --> CRT
+    CRT --> APP
+    APP <-->|"Controller / UI"| TUI
+    APP <-->|"wire.Message via wire.Conn"| WIRE
+    WIRE <-->|"JSON over TCP"| SVC
+    SRVCLI --> SVC
+    SVC --> PLY
+    SVC --> MM
+    MM --> SES
+    SES --> PLY
+    SES --> GAME
+```
+
+Logical flow:
+
+1. `cmd/client` parses flags and starts the client runtime with a concrete UI.
+2. `internal/client/app.go` manages connection lifecycle, reconnects, and move submission.
+3. `internal/wire` carries typed messages between the client and server over TCP.
+4. `internal/server/server.go` accepts connections and turns them into `Player` instances.
+5. `internal/server/matchmaker.go` pairs waiting players and starts a `Session`.
+6. `internal/server/session.go` runs one authoritative match against the `game.Engine`.
+
+```mermaid
+sequenceDiagram
+    participant Client as Client App
+    participant Server as Server
+    participant Matchmaker as Matchmaker
+    participant Session as Session
+    participant Game as Game Engine
+
+    Client->>Server: TCP connect
+    Client->>Server: hello{name}
+    Server->>Client: info{waiting}
+    Server->>Matchmaker: enqueue player
+    Matchmaker->>Session: start when two players are available
+    Session->>Client: state{symbol, board, turn}
+
+    loop During match
+        Client->>Session: move{row, col}
+        Session->>Game: ApplyMove(...)
+        Game-->>Session: valid / invalid / winner / draw
+        Session->>Client: error or updated state
+        Session->>Other Client: updated state
+    end
+
+    alt Normal game end or opponent disconnect
+        Session->>Client: final state
+        Session->>Client: info{waiting}
+        Session->>Matchmaker: requeue surviving players
+    else Server restart / connection loss
+        Server--xClient: connection drops
+        Client->>Client: retry with exponential backoff
+        Client->>Server: reconnect + hello{name}
+        Server->>Client: info{waiting}
+    else Graceful shutdown
+        Server--xClient: close connection
+        Client->>Client: cancel UI / reconnect loop
+    end
+```
+
 ## Protocol
 
 The client and server exchange JSON messages over a TCP connection. The first client message must be:
